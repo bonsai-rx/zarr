@@ -7,9 +7,10 @@
     internal sealed class ZarrArraySettings
     {
         /// <summary>
-        /// Gets or sets the number of rows stored in each chunk along the first dimension.
+        /// Gets or sets the number of rows stored in each chunk along the first dimension, or
+        /// <see langword="null"/> to store every row in a single chunk.
         /// </summary>
-        public int ChunkLength { get; set; }
+        public int? ChunkLength { get; set; }
 
         /// <summary>
         /// Gets or sets the name of each dimension of the array, or <see langword="null"/> to

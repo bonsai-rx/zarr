@@ -60,9 +60,9 @@ namespace Bonsai.Zarr.Tests
         }
 
         [TestMethod]
-        public void DefaultChunkLength_Is65536()
+        public void DefaultChunkLength_IsEmpty()
         {
-            Assert.AreEqual(65536, new ZarrWriter().ChunkLength);
+            Assert.IsNull(new ZarrWriter().ChunkLength);
         }
 
         [TestMethod]

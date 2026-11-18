@@ -69,7 +69,7 @@ namespace Bonsai.Zarr.Tests
 
         string GetArrayPath(string name) => Path.Combine(storePath, GroupName, name);
 
-        ZarrWriter CreateWriter(int chunkLength, string? selector = null, string? bufferSelector = null)
+        ZarrWriter CreateWriter(int? chunkLength, string? selector = null, string? bufferSelector = null)
         {
             return new ZarrWriter
             {
@@ -106,6 +106,17 @@ namespace Bonsai.Zarr.Tests
             CollectionAssert.AreEqual(new[] { 3L, 2L }, ZarrTestHelper.GetShape(GetArrayPath("Signal")));
             CollectionAssert.AreEqual(new[] { 0.0, 0.5 }, ZarrTestHelper.ReadElements<double>(Path.Combine(GetArrayPath("Time"), "c", "0")));
             CollectionAssert.AreEqual(new short[] { 4, 5, 0, 0 }, ZarrTestHelper.ReadElements<short>(Path.Combine(GetArrayPath("Signal"), "c", "1", "0")));
+        }
+
+        [TestMethod]
+        public async Task NoChunkLength_WritesEachArrayToSingleFile()
+        {
+            await ZarrTestHelper.Write(CreateWriter(chunkLength: null), Observable.Range(0, 3).Select(CreateSample));
+
+            CollectionAssert.AreEqual(new[] { 3L }, ZarrTestHelper.GetChunkShape(GetArrayPath("Time")));
+            CollectionAssert.AreEqual(new[] { 3L, 2L }, ZarrTestHelper.GetChunkShape(GetArrayPath("Signal")));
+            CollectionAssert.AreEqual(new[] { 0.0, 0.5, 1.0 }, ZarrTestHelper.ReadElements<double>(Path.Combine(GetArrayPath("Time"), "c", "0")));
+            CollectionAssert.AreEqual(new short[] { 0, 1, 2, 3, 4, 5 }, ZarrTestHelper.ReadElements<short>(Path.Combine(GetArrayPath("Signal"), "c", "0", "0")));
         }
 
         [TestMethod]

@@ -19,7 +19,7 @@ namespace Bonsai.Zarr
         readonly ZarrDataType dataType;
         readonly int[] rowShape;
         readonly int rowSize;
-        readonly int chunkLength;
+        readonly int? chunkLength;
         readonly string[] dimensionNames;
         readonly ZarrChunkedStorage storage;
         byte[] transposeBuffer = Array.Empty<byte>();
@@ -192,7 +192,7 @@ namespace Bonsai.Zarr
             var document = ZarrMetadata.CreateArray(
                 shape: new[] { rowCount }.Concat(rowShape.Select(length => (long)length)),
                 dataType.Name,
-                chunkShape: new[] { (long)chunkLength }.Concat(rowShape.Select(length => (long)length)),
+                chunkShape: new[] { chunkLength ?? Math.Max(rowCount, 1) }.Concat(rowShape.Select(length => (long)length)),
                 dataType.FillValue,
                 ZarrMetadata.CreateBytesCodec(dataType.ElementSize),
                 dimensionNames);

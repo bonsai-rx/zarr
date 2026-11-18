@@ -70,6 +70,56 @@ namespace Bonsai.Zarr.Tests
         }
 
         [TestMethod]
+        public void NoChunkLength_WritesSingleUnpaddedFile()
+        {
+            // Without a chunk length, the array is a single chunk that holds exactly the bytes a raw
+            // binary writer would write, and its chunk shape is set to the array shape when closed.
+            var rows = Enumerable.Range(0, 5).Select(row => Enumerable.Range(row * 3, 3).Select(i => (double)i).ToArray()).ToArray();
+            using (var writer = ZarrTestHelper.CreateArrayWriter<double>(storePath, ArrayName, new[] { 3 }, ZarrTestHelper.CreateSettings(chunkLength: null)))
+            {
+                CollectionAssert.AreEqual(new[] { 0L, 3L }, ZarrTestHelper.GetShape(ArrayPath));
+                CollectionAssert.AreEqual(new[] { 1L, 3L }, ZarrTestHelper.GetChunkShape(ArrayPath));
+                foreach (var row in rows)
+                {
+                    ZarrTestHelper.WriteRows(writer, row);
+                }
+            }
+
+            CollectionAssert.AreEqual(new[] { 5L, 3L }, ZarrTestHelper.GetShape(ArrayPath));
+            CollectionAssert.AreEqual(new[] { 5L, 3L }, ZarrTestHelper.GetChunkShape(ArrayPath));
+            var raw = rows.SelectMany(row => row.SelectMany(BitConverter.GetBytes)).ToArray();
+            CollectionAssert.AreEqual(raw, File.ReadAllBytes(Path.Combine(ArrayPath, "c", "0", "0")));
+            Assert.IsFalse(Directory.Exists(Path.Combine(ArrayPath, "c", "1")));
+        }
+
+        [TestMethod]
+        public void OpenFile_EndsOnRowBoundary()
+        {
+            // Rows reach the file in whole numbers even when the row size does not divide the
+            // writer buffer, so an interrupted recording can be repaired from metadata alone.
+            const int RowLength = 3;
+            const int RowSize = RowLength * sizeof(double);
+            var row = new double[RowLength];
+            using var writer = ZarrTestHelper.CreateArrayWriter<double>(storePath, ArrayName, new[] { RowLength }, ZarrTestHelper.CreateSettings(chunkLength: null));
+            for (int i = 0; i < 4000; i++)
+            {
+                ZarrTestHelper.WriteRows(writer, row);
+            }
+
+            var size = new FileInfo(Path.Combine(ArrayPath, "c", "0", "0")).Length;
+            Assert.IsTrue(size > 0, "No rows reached the file.");
+            Assert.AreEqual(0L, size % RowSize);
+        }
+
+        [TestMethod]
+        public void NoChunkLength_EmptyArray_HasValidChunkShape()
+        {
+            ZarrTestHelper.CreateArrayWriter<int>(storePath, ArrayName, Array.Empty<int>(), ZarrTestHelper.CreateSettings(chunkLength: null)).Dispose();
+            CollectionAssert.AreEqual(new[] { 0L }, ZarrTestHelper.GetShape(ArrayPath));
+            CollectionAssert.AreEqual(new[] { 1L }, ZarrTestHelper.GetChunkShape(ArrayPath));
+        }
+
+        [TestMethod]
         public void RowsSpanningChunks_SplitAcrossChunkFiles()
         {
             using (var writer = ZarrTestHelper.CreateArrayWriter<short>(storePath, ArrayName, Array.Empty<int>(), ZarrTestHelper.CreateSettings(chunkLength: 4)))
