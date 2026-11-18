@@ -9,7 +9,7 @@ namespace Bonsai.Zarr
     /// </summary>
     internal sealed class ZarrChunkStream : IDisposable
     {
-        const int BufferSize = 65536;
+        const int TargetBufferSize = 65536;
 
         readonly FileStream stream;
         readonly byte[] buffer;
@@ -20,11 +20,15 @@ namespace Bonsai.Zarr
         /// replaces the file at the specified path, together with any missing parent directories.
         /// </summary>
         /// <param name="path">The path of the file to write.</param>
-        public ZarrChunkStream(string path)
+        /// <param name="rowSize">
+        /// The size of each row, in bytes. The stream writes whole rows to the file, so the file
+        /// always ends on a row boundary.
+        /// </param>
+        public ZarrChunkStream(string path, int rowSize)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, bufferSize: 1);
-            buffer = new byte[BufferSize];
+            buffer = new byte[Math.Max(rowSize, TargetBufferSize - TargetBufferSize % rowSize)];
         }
 
         /// <summary>

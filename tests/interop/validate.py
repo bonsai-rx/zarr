@@ -38,9 +38,23 @@ BUFFER_COUNT = 3
 BUFFER_LENGTH = 5
 CHANNEL_COUNT = 4
 INTERRUPTED_COUNT = 10
+INTERRUPTED_CONTIGUOUS_COUNT = 10000
+INTERRUPTED_CONTIGUOUS_FRAME_COUNT = 30000
+WRITER_BUFFER_SIZE = 65536
 
-# Rows still in the writer buffer when the copy was taken are lost; only complete chunks remain.
+
+def flushed_rows(count, row_size):
+    """Returns the rows of an open array that reached its file, in whole writer buffers."""
+    buffer_size = max(row_size, WRITER_BUFFER_SIZE - WRITER_BUFFER_SIZE % row_size)
+    return count * row_size // buffer_size * buffer_size // row_size
+
+
+# Rows still in the writer buffer when the copy was taken are lost. Only complete chunks remain
+# of a chunked array, and only the flushed part of the buffer of a single-file array.
 RECOVERED_COUNT = INTERRUPTED_COUNT // CHUNK_LENGTH * CHUNK_LENGTH
+RECOVERED_CONTIGUOUS_COUNT = flushed_rows(INTERRUPTED_CONTIGUOUS_COUNT, 8)
+RECOVERED_TIME_COUNT = flushed_rows(INTERRUPTED_CONTIGUOUS_FRAME_COUNT, 8)
+RECOVERED_SIGNAL_COUNT = flushed_rows(INTERRUPTED_CONTIGUOUS_FRAME_COUNT, 4)
 
 VALUES = {
     "bool": lambda i: i % 3 == 0,
@@ -69,12 +83,16 @@ def expected_values(dtype, count):
     return np.array([VALUES[dtype](i) for i in range(count)], dtype=dtype)
 
 
-def check_array(group, path, dtype, expected, dimension_names):
+def check_array(group, path, dtype, expected, dimension_names, chunk_length=CHUNK_LENGTH):
+    """Checks an array, which is stored in a single chunk if the chunk length is None."""
     array = group[path]
     assert isinstance(array, zarr.Array), f"{path} is not an array"
     assert array.dtype == np.dtype(dtype), f"{path}: dtype {array.dtype} != {dtype}"
     assert array.shape == expected.shape, f"{path}: shape {array.shape} != {expected.shape}"
-    assert array.chunks[0] == CHUNK_LENGTH, f"{path}: chunks {array.chunks}"
+    if chunk_length is None:
+        assert array.chunks == array.shape, f"{path}: chunks {array.chunks} != shape {array.shape}"
+    else:
+        assert array.chunks[0] == chunk_length, f"{path}: chunks {array.chunks}"
     codecs = [codec["name"] for codec in array.metadata.to_dict()["codecs"]]
     assert codecs == ["bytes"], f"{path}: codecs {codecs}"
     assert array.metadata.dimension_names == dimension_names, f"{path}: dimension names {array.metadata.dimension_names}"
@@ -90,14 +108,14 @@ def frame_time(count):
 
 
 def frame_signal(count):
-    return np.arange(2 * count, dtype="int16").reshape(count, 2)
+    return np.arange(2 * count).astype("int16").reshape(count, 2)
 
 
-def check_frame(store_path, root, path, count):
+def check_frame(store_path, root, path, count, chunk_length=CHUNK_LENGTH):
     group_name = path.rsplit("/", 1)[-1]
     dimension = f"{group_name}_dim_0"
-    check_array(root, f"{path}/Time", "float64", frame_time(count), (dimension,))
-    check_array(root, f"{path}/Signal", "int16", frame_signal(count), (dimension, "Signal_dim_1"))
+    check_array(root, f"{path}/Time", "float64", frame_time(count), (dimension,), chunk_length)
+    check_array(root, f"{path}/Signal", "int16", frame_signal(count), (dimension, "Signal_dim_1"), chunk_length)
     dataset = xr.open_zarr(store_path, group=path, consolidated=False)
     assert dataset.sizes[dimension] == count, f"{path}: sizes {dict(dataset.sizes)}"
     assert dataset["Signal"].dims == (dimension, "Signal_dim_1"), f"{path}: dims {dataset['Signal'].dims}"
@@ -126,19 +144,36 @@ def check_buffers(store_path, root):
 def check_interrupted(store_path, root):
     check_array(root, "closed/float64", "float64", np.arange(INTERRUPTED_COUNT, dtype="float64"), ("float64_dim_0",))
     check_frame(store_path, root, "closed/frame", INTERRUPTED_COUNT)
-    assert root["interrupted/float64"].shape == (0,), "interrupted/float64 is not empty"
-    assert root["interrupted/frame/Time"].shape == (0,), "interrupted/frame/Time is not empty"
+    contiguous = np.arange(INTERRUPTED_CONTIGUOUS_COUNT, dtype="float64")
+    check_array(root, "closed/contiguous", "float64", contiguous, ("contiguous_dim_0",), None)
+    for path in ("interrupted/float64", "interrupted/frame/Time", "interrupted/contiguous", "interrupted/contiguous_frame/Time"):
+        assert root[path].shape == (0,), f"{path} is not empty"
 
     repair = load_repair()
     with tempfile.TemporaryDirectory() as temporary:
         copy_path = Path(temporary) / "interrupted"
         shutil.copytree(Path(store_path) / "interrupted", copy_path)
         repaired = repair.repair(copy_path)
-        assert len(repaired) == 3, f"repaired {repaired}"
+        assert len(repaired) == 6, f"repaired {repaired}"
         repaired_root = zarr.open_group(copy_path, mode="r")
         check_array(repaired_root, "float64", "float64", np.arange(RECOVERED_COUNT, dtype="float64"), ("float64_dim_0",))
         check_frame(copy_path, repaired_root, "frame", RECOVERED_COUNT)
-    return 7
+        recovered = contiguous[:RECOVERED_CONTIGUOUS_COUNT]
+        check_array(repaired_root, "contiguous", "float64", recovered, ("contiguous_dim_0",), None)
+        check_aligned_single_files(copy_path, repaired_root)
+    return 11
+
+
+def check_aligned_single_files(store_path, root):
+    """Checks that aligning a single-file group keeps every recovered row in the files."""
+    aligned = min(RECOVERED_TIME_COUNT, RECOVERED_SIGNAL_COUNT)
+    dimension = ("contiguous_frame_dim_0",)
+    check_array(root, "contiguous_frame/Time", "float64", frame_time(aligned), dimension, RECOVERED_TIME_COUNT)
+    check_array(root, "contiguous_frame/Signal", "int16", frame_signal(aligned), (*dimension, "Signal_dim_1"), RECOVERED_SIGNAL_COUNT)
+    stored_time = np.fromfile(Path(store_path) / "contiguous_frame" / "Time" / "c" / "0", dtype="float64")
+    np.testing.assert_array_equal(stored_time, frame_time(RECOVERED_TIME_COUNT), err_msg="contiguous_frame/Time file")
+    dataset = xr.open_zarr(store_path, group="contiguous_frame", consolidated=False)
+    assert dataset.sizes[dimension[0]] == aligned, f"contiguous_frame: sizes {dict(dataset.sizes)}"
 
 
 def validate(store_path):
@@ -149,11 +184,14 @@ def validate(store_path):
         check_array(root, f"values/{dtype}", dtype, values, (f"{dtype}_dim_0",))
         rows = expected_values(dtype, ROW_COUNT * ROW_LENGTH).reshape(ROW_COUNT, ROW_LENGTH)
         check_array(root, f"rows/{dtype}", dtype, rows, (f"{dtype}_dim_0", f"{dtype}_dim_1"))
-        checked += 2
+        check_array(root, f"contiguous_values/{dtype}", dtype, values, (f"{dtype}_dim_0",), None)
+        check_array(root, f"contiguous_rows/{dtype}", dtype, rows, (f"{dtype}_dim_0", f"{dtype}_dim_1"), None)
+        checked += 4
 
     check_array(root, "disposed/float64", "float64", np.arange(6, dtype="float64"), ("float64_dim_0",))
     check_frame(store_path, root, "frame", FRAME_COUNT)
-    checked += 3
+    check_frame(store_path, root, "contiguous_frame", FRAME_COUNT, None)
+    checked += 5
     checked += check_buffers(store_path, root)
     checked += check_interrupted(store_path, root)
     return checked

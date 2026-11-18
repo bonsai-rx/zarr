@@ -40,7 +40,7 @@ namespace Bonsai.Zarr.Tests
             return WorkflowTestHelper.BuildObservable<TSource>(Expression.Constant(source, typeof(IObservable<TSource>)), writer);
         }
 
-        public static ZarrArraySettings CreateSettings(int chunkLength)
+        public static ZarrArraySettings CreateSettings(int? chunkLength)
         {
             return new ZarrArraySettings { ChunkLength = chunkLength };
         }
@@ -64,6 +64,11 @@ namespace Bonsai.Zarr.Tests
         public static long[] GetShape(string arrayPath)
         {
             return ReadMetadata(arrayPath)["shape"]!.Values<long>().ToArray();
+        }
+
+        public static long[] GetChunkShape(string arrayPath)
+        {
+            return ReadMetadata(arrayPath)["chunk_grid"]!["configuration"]!["chunk_shape"]!.Values<long>().ToArray();
         }
 
         public static string[] GetDimensionNames(string arrayPath)

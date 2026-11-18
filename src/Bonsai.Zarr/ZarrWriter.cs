@@ -52,7 +52,6 @@ namespace Bonsai.Zarr
         public ZarrWriter()
             : base(minArguments: 1, maxArguments: 1)
         {
-            ChunkLength = 65536;
         }
 
         /// <summary>
@@ -94,10 +93,11 @@ namespace Bonsai.Zarr
         public string? BufferSelector { get; set; }
 
         /// <summary>
-        /// Gets or sets the number of rows stored in each chunk file.
+        /// Gets or sets the optional number of rows stored in each chunk file. If no value is
+        /// specified, each array is stored in a single file.
         /// </summary>
-        [Description("The number of rows stored in each chunk file.")]
-        public int ChunkLength { get; set; }
+        [Description("The optional number of rows stored in each chunk file. If no value is specified, each array is stored in a single file.")]
+        public int? ChunkLength { get; set; }
 
         /// <summary>
         /// Gets or sets a value specifying whether to replace an existing array or group with the

@@ -23,6 +23,8 @@ namespace Bonsai.Zarr.Tests
         const int BufferLength = 5;
         const int ChannelCount = 4;
         const int InterruptedCount = 10;
+        const int InterruptedContiguousCount = 10000;
+        const int InterruptedContiguousFrameCount = 30000;
 
         public struct Sample
         {
@@ -46,13 +48,13 @@ namespace Bonsai.Zarr.Tests
 
         static string StorePath => Path.Combine(AppContext.BaseDirectory, "interop.zarr");
 
-        static ZarrWriter CreateWriter(string path, string? bufferSelector = null)
+        static ZarrWriter CreateWriter(string path, string? bufferSelector = null, int? chunkLength = ChunkLength)
         {
             return new ZarrWriter
             {
                 Path = StorePath,
                 Name = path,
-                ChunkLength = ChunkLength,
+                ChunkLength = chunkLength,
                 BufferSelector = bufferSelector
             };
         }
@@ -61,11 +63,13 @@ namespace Bonsai.Zarr.Tests
         {
             var values = Enumerable.Range(0, ValueCount).Select(getValue).ToArray();
             await ZarrTestHelper.Write(CreateWriter($"values/{dataType}"), values.ToObservable());
+            await ZarrTestHelper.Write(CreateWriter($"contiguous_values/{dataType}", chunkLength: null), values.ToObservable());
 
             var rows = Enumerable.Range(0, RowCount)
                 .Select(row => Enumerable.Range(row * RowLength, RowLength).Select(getValue).ToArray())
                 .ToArray();
             await ZarrTestHelper.Write(CreateWriter($"rows/{dataType}"), rows.ToObservable());
+            await ZarrTestHelper.Write(CreateWriter($"contiguous_rows/{dataType}", chunkLength: null), rows.ToObservable());
         }
 
         static Sample CreateSample(int i)
@@ -108,12 +112,12 @@ namespace Bonsai.Zarr.Tests
             }
         }
 
-        static void WriteInterrupted<T>(string path, string copyPath, Func<int, T> getValue)
+        static void WriteInterrupted<T>(string path, string copyPath, Func<int, T> getValue, int count = InterruptedCount, int? chunkLength = ChunkLength)
         {
             // The copy is taken while the writer is still open, as a crash would leave the store.
             var source = new Subject<T>();
-            var subscription = ZarrTestHelper.Write(CreateWriter(path), source).Subscribe();
-            for (int i = 0; i < InterruptedCount; i++)
+            var subscription = ZarrTestHelper.Write(CreateWriter(path, chunkLength: chunkLength), source).Subscribe();
+            for (int i = 0; i < count; i++)
             {
                 source.OnNext(getValue(i));
             }
@@ -153,6 +157,7 @@ namespace Bonsai.Zarr.Tests
             subscription.Dispose();
 
             await ZarrTestHelper.Write(CreateWriter("frame"), Enumerable.Range(0, FrameCount).Select(CreateSample).ToObservable());
+            await ZarrTestHelper.Write(CreateWriter("contiguous_frame", chunkLength: null), Enumerable.Range(0, FrameCount).Select(CreateSample).ToObservable());
 
             var buffers = Enumerable.Range(0, BufferCount).Select(i => new Buffer
             {
@@ -173,6 +178,8 @@ namespace Bonsai.Zarr.Tests
 
             WriteInterrupted("closed/float64", "interrupted/float64", i => (double)i);
             WriteInterrupted("closed/frame", "interrupted/frame", CreateSample);
+            WriteInterrupted("closed/contiguous", "interrupted/contiguous", i => (double)i, InterruptedContiguousCount, chunkLength: null);
+            WriteInterrupted("closed/contiguous_frame", "interrupted/contiguous_frame", CreateSample, InterruptedContiguousFrameCount, chunkLength: null);
             CollectionAssert.AreEqual(new[] { 0L }, ZarrTestHelper.GetShape(Path.Combine(StorePath, "interrupted", "float64")));
         }
     }

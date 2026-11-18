@@ -17,7 +17,7 @@ namespace Bonsai.Zarr
         readonly string path;
         readonly ZarrMember<TSource>[] members;
         readonly Func<TSource, int>? getBufferLength;
-        readonly int chunkLength;
+        readonly int? chunkLength;
         readonly bool overwrite;
         ZarrArrayWriter[]? arrays;
 
@@ -38,7 +38,10 @@ namespace Bonsai.Zarr
         /// A function that returns the number of rows each element adds to every array, or
         /// <see langword="null"/> if each element adds a single row.
         /// </param>
-        /// <param name="chunkLength">The number of rows stored in each chunk.</param>
+        /// <param name="chunkLength">
+        /// The number of rows stored in each chunk, or <see langword="null"/> to store every row of
+        /// each array in a single file.
+        /// </param>
         /// <param name="overwrite">
         /// <see langword="true"/> to replace an existing node at the same path; otherwise,
         /// <see langword="false"/>.
@@ -48,7 +51,7 @@ namespace Bonsai.Zarr
             string path,
             ZarrMember<TSource>[] members,
             Func<TSource, int>? getBufferLength,
-            int chunkLength,
+            int? chunkLength,
             bool overwrite)
         {
             this.storePath = storePath;

@@ -38,7 +38,7 @@ When each element is itself an array of consecutive samples, such as a buffer fr
 
 ## Chunks and recovery
 
-`ChunkLength` sets the number of rows stored in each chunk file. Each chunk file holds the same bytes as a raw binary file of its rows. The last chunk is padded with zeros when the workflow stops, whether the sequence completes, fails or is cancelled.
+`ChunkLength` sets the number of rows stored in each chunk file. Each chunk file holds the same bytes as a raw binary file of its rows. The last chunk is padded with zeros when the workflow stops, whether the sequence completes, fails or is cancelled. If `ChunkLength` is empty, each array is stored in a single file with no padding.
 
 The number of rows in each array is written when the workflow stops. If the process ends unexpectedly, the chunk files still hold the data but every array reads as empty until it is repaired, as described in [Recovering an interrupted recording](articles/recovery.md).
 
