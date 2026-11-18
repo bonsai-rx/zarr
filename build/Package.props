@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <PackageTags>Bonsai Rx Zarr</PackageTags>
+    <PackageProjectUrl>https://bonsai-rx.org/zarr</PackageProjectUrl>
+
+    <Authors>Bonsai Foundation</Authors>
+    <Copyright>Copyright © Bonsai Foundation CIC and Contributors</Copyright>
+  </PropertyGroup>
+</Project>
