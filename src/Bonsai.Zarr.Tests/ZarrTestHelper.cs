@@ -43,8 +43,19 @@ namespace Bonsai.Zarr.Tests
         public static void WaitFor(Func<bool> condition, string message)
         {
             var stopwatch = Stopwatch.StartNew();
-            while (!condition())
+            while (true)
             {
+                // A file that is briefly locked while the writer thread replaces it counts as a
+                // condition not yet met.
+                try
+                {
+                    if (condition())
+                        return;
+                }
+                catch (IOException)
+                {
+                }
+
                 if (stopwatch.Elapsed > TimeSpan.FromSeconds(10))
                 {
                     Assert.Fail(message);
