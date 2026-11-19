@@ -1,9 +1,9 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using OpenCV.Net;
 
 namespace Bonsai.Zarr.Tests
 {
@@ -30,8 +30,8 @@ namespace Bonsai.Zarr.Tests
         [TestMethod]
         public void Shape_PublishedOnlyOnDisposal()
         {
-            // Rows reach their chunk files as they are written, but the shape stays empty until
-            // the writer is disposed, so an interrupted array reads as empty until it is repaired.
+            // Rows are written to their chunk files as they arrive, but the shape stays empty until
+            // the writer is disposed.
             using (var writer = ZarrTestHelper.CreateArrayWriter<int>(storePath, ArrayName, Array.Empty<int>(), ZarrTestHelper.CreateSettings(chunkLength: 2)))
             {
                 CollectionAssert.AreEqual(new[] { 0L }, ZarrTestHelper.GetShape(ArrayPath));
@@ -95,8 +95,8 @@ namespace Bonsai.Zarr.Tests
         [TestMethod]
         public void OpenFile_EndsOnRowBoundary()
         {
-            // Rows reach the file in whole numbers even when the row size does not divide the
-            // writer buffer, so an interrupted recording can be repaired from metadata alone.
+            // Rows are always written to the file in whole numbers, even when the row size does not
+            // divide the writer buffer.
             const int RowLength = 3;
             const int RowSize = RowLength * sizeof(double);
             var row = new double[RowLength];
@@ -138,16 +138,11 @@ namespace Bonsai.Zarr.Tests
         public void WriteColumns_WritesOneRowPerColumn()
         {
             // A row-major matrix with one row per channel is stored with one row per sample.
-            var matrix = new short[] { 1, 2, 3, 4, 5, 6, 7, 8 };
-            var handle = GCHandle.Alloc(matrix, GCHandleType.Pinned);
-            try
+            ZarrTestHelper.RequireOpenCV();
+            var matrix = Mat.FromArray(new short[,] { { 1, 2, 3, 4 }, { 5, 6, 7, 8 } });
+            using (var writer = ZarrTestHelper.CreateArrayWriter<short>(storePath, ArrayName, new[] { 2 }, ZarrTestHelper.CreateSettings(chunkLength: 4)))
             {
-                using var writer = ZarrTestHelper.CreateArrayWriter<short>(storePath, ArrayName, new[] { 2 }, ZarrTestHelper.CreateSettings(chunkLength: 4));
-                writer.WriteColumns(handle.AddrOfPinnedObject(), step: 4 * sizeof(short), rows: 2, columns: 4);
-            }
-            finally
-            {
-                handle.Free();
+                writer.WriteColumns(matrix);
             }
 
             CollectionAssert.AreEqual(new[] { 4L, 2L }, ZarrTestHelper.GetShape(ArrayPath));
@@ -157,7 +152,7 @@ namespace Bonsai.Zarr.Tests
         [TestMethod]
         public void ConcurrentWriters_ShareStoreAndGroups()
         {
-            // Every writer ensures the same ancestor groups exist, so their metadata writes overlap.
+            // Every writer ensures the same ancestor groups exist, with overlapping metadata writes.
             const int WriterCount = 16;
             Parallel.For(0, WriterCount, i =>
             {

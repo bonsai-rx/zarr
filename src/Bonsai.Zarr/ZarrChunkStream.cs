@@ -1,5 +1,8 @@
 ﻿using System;
 using System.IO;
+#if !NET
+using Microsoft.Win32.SafeHandles;
+#endif
 
 namespace Bonsai.Zarr
 {
@@ -12,6 +15,9 @@ namespace Bonsai.Zarr
         const int TargetBufferSize = 65536;
 
         readonly FileStream stream;
+#if !NET
+        readonly SafeFileHandle handle;
+#endif
         readonly byte[] buffer;
         int bufferLength;
 
@@ -21,31 +27,40 @@ namespace Bonsai.Zarr
         /// </summary>
         /// <param name="path">The path of the file to write.</param>
         /// <param name="rowSize">
-        /// The size of each row, in bytes. The stream writes whole rows to the file, so the file
-        /// always ends on a row boundary.
+        /// The size of each row, in bytes. The stream always writes whole rows to the file.
         /// </param>
         public ZarrChunkStream(string path, int rowSize)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, bufferSize: 1);
+#if !NET
+            handle = stream.SafeFileHandle;
+#endif
             buffer = new byte[Math.Max(rowSize, TargetBufferSize - TargetBufferSize % rowSize)];
         }
 
         /// <summary>
-        /// Writes a sequence of bytes to the stream.
+        /// Writes whole rows to the stream. Rows that do not fill the buffer are kept in it until
+        /// the buffer is full or the stream is flushed.
         /// </summary>
-        /// <param name="data">The bytes to write.</param>
+        /// <param name="data">The bytes of the rows to write.</param>
         public void Write(ReadOnlySpan<byte> data)
         {
             while (data.Length > 0)
             {
+                if (bufferLength == 0 && data.Length >= buffer.Length)
+                {
+                    WriteFile(data);
+                    return;
+                }
+
                 var count = Math.Min(data.Length, buffer.Length - bufferLength);
                 data.Slice(0, count).CopyTo(buffer.AsSpan(bufferLength));
                 bufferLength += count;
                 data = data.Slice(count);
                 if (bufferLength == buffer.Length)
                 {
-                    WriteBuffer();
+                    Flush();
                 }
             }
         }
@@ -63,10 +78,25 @@ namespace Bonsai.Zarr
             }
         }
 
-        void WriteBuffer()
+        /// <summary>
+        /// Writes any buffered rows to the file.
+        /// </summary>
+        public void Flush()
         {
-            stream.Write(buffer, 0, bufferLength);
-            bufferLength = 0;
+            if (bufferLength > 0)
+            {
+                WriteFile(buffer.AsSpan(0, bufferLength));
+                bufferLength = 0;
+            }
+        }
+
+        void WriteFile(ReadOnlySpan<byte> data)
+        {
+#if NET
+            stream.Write(data);
+#else
+            NativeMethods.WriteFile(handle, data);
+#endif
         }
 
         /// <summary>
@@ -78,7 +108,7 @@ namespace Bonsai.Zarr
         /// </param>
         public void Finish(bool flushToDisk)
         {
-            WriteBuffer();
+            Flush();
             stream.Flush(flushToDisk);
             stream.Dispose();
         }

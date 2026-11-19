@@ -10,7 +10,17 @@ namespace Bonsai.Zarr
     /// <typeparam name="TSource">The type of the elements in the sequence.</typeparam>
     internal sealed class ZarrMatBufferMember<TSource> : ZarrMember<TSource>
     {
+        static readonly ZarrDataType[] DepthDataTypes;
         readonly Func<TSource, Mat> selector;
+
+        static ZarrMatBufferMember()
+        {
+            DepthDataTypes = new ZarrDataType[(int)Depth.F64 + 1];
+            foreach (var depth in new[] { Depth.U8, Depth.S8, Depth.U16, Depth.S16, Depth.S32, Depth.F32, Depth.F64 })
+            {
+                DepthDataTypes[(int)depth] = ZarrDataType.FromType(GetElementType(depth));
+            }
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ZarrMatBufferMember{TSource}"/> class.
@@ -49,10 +59,21 @@ namespace Bonsai.Zarr
             };
         }
 
+        static ZarrDataType GetDataType(Depth depth)
+        {
+            var index = (int)depth;
+            if (index < 0 || index >= DepthDataTypes.Length)
+            {
+                throw new NotSupportedException($"The matrix depth '{depth}' has no corresponding Zarr data type.");
+            }
+
+            return DepthDataTypes[index];
+        }
+
         /// <inheritdoc/>
         public override ZarrDataType GetDataType(TSource value)
         {
-            return ZarrDataType.FromType(GetElementType(GetMatrix(value).Depth));
+            return GetDataType(GetMatrix(value).Depth);
         }
 
         /// <inheritdoc/>
@@ -62,28 +83,27 @@ namespace Bonsai.Zarr
         public override int GetRowCount(TSource value) => GetMatrix(value).Cols;
 
         /// <inheritdoc/>
-        public override void Validate(ZarrArrayWriter array, TSource value)
+        public override void Validate(ZarrDataType dataType, int rowLength, TSource value)
         {
             var matrix = GetMatrix(value);
-            var dataType = ZarrDataType.FromType(GetElementType(matrix.Depth));
-            if (dataType.Name != array.DataType.Name)
+            var matrixDataType = GetDataType(matrix.Depth);
+            if (matrixDataType.Name != dataType.Name)
             {
                 throw new InvalidOperationException(
-                    $"{GetDisplayName()} has elements of type {dataType.Name} but the array holds {array.DataType.Name}.");
+                    $"{GetDisplayName()} has elements of type {matrixDataType.Name} but the array holds {dataType.Name}.");
             }
 
-            if (matrix.Rows != array.RowLength)
+            if (matrix.Rows != rowLength)
             {
                 throw new InvalidOperationException(
-                    $"{GetDisplayName()} has {matrix.Rows} rows but the array expects {array.RowLength} channels per sample.");
+                    $"{GetDisplayName()} has {matrix.Rows} rows but the array expects {rowLength} channels per sample.");
             }
         }
 
         /// <inheritdoc/>
         public override void Write(ZarrArrayWriter array, TSource value)
         {
-            var matrix = GetMatrix(value);
-            array.WriteColumns(matrix.Data, matrix.Step, matrix.Rows, matrix.Cols);
+            array.WriteColumns(GetMatrix(value));
         }
     }
 }

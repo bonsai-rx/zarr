@@ -118,16 +118,17 @@ namespace Bonsai.Zarr.Tests
         [TestMethod]
         public void Disposal_WithoutCompletion_PersistsData()
         {
-            // Stopping a workflow disposes the subscription without completing the sequence.
+            // Stopping a workflow disposes the subscription without completing the sequence, and
+            // the queued rows are written in the background after disposal returns.
             var source = new Subject<float>();
             var subscription = ZarrTestHelper.Write(CreateWriter(chunkLength: 4), source).Subscribe();
             source.OnNext(1);
             source.OnNext(2);
             source.OnNext(3);
-            CollectionAssert.AreEqual(new[] { 0L }, ZarrTestHelper.GetShape(ArrayPath));
+            ZarrTestHelper.WaitForShape(ArrayPath, 0);
             subscription.Dispose();
 
-            CollectionAssert.AreEqual(new[] { 3L }, ZarrTestHelper.GetShape(ArrayPath));
+            ZarrTestHelper.WaitForShape(ArrayPath, 3);
             CollectionAssert.AreEqual(new[] { 1f, 2f, 3f, 0f }, ZarrTestHelper.ReadElements<float>(Path.Combine(ArrayPath, "c", "0")));
         }
 
@@ -141,9 +142,10 @@ namespace Bonsai.Zarr.Tests
         [TestMethod]
         public async Task ExistingArray_RaisesIOException()
         {
+            // The error from an existing array is raised while the sequence has not terminated.
             await ZarrTestHelper.Write(CreateWriter(chunkLength: 2), Observable.Return(1));
             await Assert.ThrowsExactlyAsync<IOException>(
-                async () => await ZarrTestHelper.Write(CreateWriter(chunkLength: 2), Observable.Return(2)));
+                async () => await ZarrTestHelper.Write(CreateWriter(chunkLength: 2), Observable.Return(2).Concat(Observable.Never<int>())));
             CollectionAssert.AreEqual(new[] { 1, 0 }, ZarrTestHelper.ReadElements<int>(Path.Combine(ArrayPath, "c", "0")));
         }
 

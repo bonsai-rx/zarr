@@ -13,7 +13,7 @@ namespace Bonsai.Zarr.Tests
     public class TestInteropStores
     {
         // Writes the store read by tests/interop/validate.py, which checks it against zarr-python
-        // and xarray. The values follow the formulas in that script, so both must change together.
+        // and xarray. The values follow the formulas in that script, and both must change together.
         const int ValueCount = 10;
         const int RowCount = 7;
         const int RowLength = 3;
@@ -25,6 +25,10 @@ namespace Bonsai.Zarr.Tests
         const int InterruptedCount = 10;
         const int InterruptedContiguousCount = 10000;
         const int InterruptedContiguousFrameCount = 30000;
+        const int InterruptedMissingSignalCount = 1000;
+
+        static readonly (string Name, int RowSize)[] ValueArrays = { (string.Empty, sizeof(double)) };
+        static readonly (string Name, int RowSize)[] SampleArrays = { ("Time", sizeof(double)), ("Signal", 2 * sizeof(short)) };
 
         public struct Sample
         {
@@ -112,14 +116,37 @@ namespace Bonsai.Zarr.Tests
             }
         }
 
-        static void WriteInterrupted<T>(string path, string copyPath, Func<int, T> getValue, int count = InterruptedCount, int? chunkLength = ChunkLength)
+        static long GetChunkBytes(string arrayPath)
         {
-            // The copy is taken while the writer is still open, as a crash would leave the store.
+            var chunkPath = Path.Combine(arrayPath, "c");
+            return Directory.Exists(chunkPath)
+                ? Directory.GetFiles(chunkPath, "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length)
+                : 0;
+        }
+
+        static void WriteInterrupted<T>(
+            string path,
+            string copyPath,
+            Func<int, T> getValue,
+            (string Name, int RowSize)[] arrays,
+            int count = InterruptedCount,
+            int? chunkLength = ChunkLength)
+        {
+            // The copy is taken while the writer is still open, as a crash would leave the store,
+            // after every queued row is written.
             var source = new Subject<T>();
             var subscription = ZarrTestHelper.Write(CreateWriter(path, chunkLength: chunkLength), source).Subscribe();
             for (int i = 0; i < count; i++)
             {
                 source.OnNext(getValue(i));
+            }
+
+            foreach (var (name, rowSize) in arrays)
+            {
+                var arrayPath = Path.Combine(StorePath, path, name);
+                ZarrTestHelper.WaitFor(
+                    () => GetChunkBytes(arrayPath) >= (long)count * rowSize,
+                    $"The chunk files of '{arrayPath}' do not hold every row.");
             }
 
             var sourcePath = Path.Combine(StorePath, path);
@@ -129,6 +156,13 @@ namespace Bonsai.Zarr.Tests
                 Path.Combine(Path.GetDirectoryName(sourcePath)!, "zarr.json"),
                 Path.Combine(Path.GetDirectoryName(destinationPath)!, "zarr.json"));
             subscription.Dispose();
+            foreach (var (name, _) in arrays)
+            {
+                var arrayPath = Path.Combine(sourcePath, name);
+                ZarrTestHelper.WaitFor(
+                    () => ZarrTestHelper.GetShape(arrayPath)[0] == count,
+                    $"The array '{arrayPath}' was not closed.");
+            }
         }
 
         [TestMethod]
@@ -155,6 +189,7 @@ namespace Bonsai.Zarr.Tests
             }
 
             subscription.Dispose();
+            ZarrTestHelper.WaitForShape(Path.Combine(StorePath, "disposed", "float64"), 6);
 
             await ZarrTestHelper.Write(CreateWriter("frame"), Enumerable.Range(0, FrameCount).Select(CreateSample).ToObservable());
             await ZarrTestHelper.Write(CreateWriter("contiguous_frame", chunkLength: null), Enumerable.Range(0, FrameCount).Select(CreateSample).ToObservable());
@@ -176,10 +211,19 @@ namespace Bonsai.Zarr.Tests
                 await ZarrTestHelper.Write(CreateWriter("mat", bufferSelector: "Clock"), matBuffers.ToObservable());
             }
 
-            WriteInterrupted("closed/float64", "interrupted/float64", i => (double)i);
-            WriteInterrupted("closed/frame", "interrupted/frame", CreateSample);
-            WriteInterrupted("closed/contiguous", "interrupted/contiguous", i => (double)i, InterruptedContiguousCount, chunkLength: null);
-            WriteInterrupted("closed/contiguous_frame", "interrupted/contiguous_frame", CreateSample, InterruptedContiguousFrameCount, chunkLength: null);
+            WriteInterrupted("closed/float64", "interrupted/float64", i => (double)i, ValueArrays);
+            WriteInterrupted("closed/frame", "interrupted/frame", CreateSample, SampleArrays);
+            WriteInterrupted("closed/contiguous", "interrupted/contiguous", i => (double)i, ValueArrays, InterruptedContiguousCount, chunkLength: null);
+            WriteInterrupted("closed/contiguous_frame", "interrupted/contiguous_frame", CreateSample, SampleArrays, InterruptedContiguousFrameCount, chunkLength: null);
+
+            // A crash while the writer is behind can leave the arrays of a group with different
+            // numbers of rows, which is simulated by removing rows from the end of one array.
+            var signalPath = Path.Combine(StorePath, "interrupted", "contiguous_frame", "Signal", "c", "0", "0");
+            using (var signal = new FileStream(signalPath, FileMode.Open, FileAccess.Write))
+            {
+                signal.SetLength(signal.Length - InterruptedMissingSignalCount * 2 * sizeof(short));
+            }
+
             CollectionAssert.AreEqual(new[] { 0L }, ZarrTestHelper.GetShape(Path.Combine(StorePath, "interrupted", "float64")));
         }
     }

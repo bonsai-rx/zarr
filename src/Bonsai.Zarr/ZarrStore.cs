@@ -108,8 +108,8 @@ namespace Bonsai.Zarr
         }
 
         /// <summary>
-        /// Ensures no Zarr node exists in the specified directory, deleting an existing array or
-        /// group, and everything it holds, if overwriting is enabled.
+        /// Ensures no Zarr node exists in the specified directory. An existing array or group is
+        /// deleted, together with everything it holds, if overwriting is enabled.
         /// </summary>
         /// <param name="directory">The directory of the node.</param>
         /// <param name="overwrite">
@@ -202,8 +202,8 @@ namespace Bonsai.Zarr
         /// replacing any existing file.
         /// </summary>
         /// <remarks>
-        /// Replacing a file that another writer or process holds open is retried with increasing
-        /// delays, for up to a quarter of a second, before the error is raised.
+        /// If another writer or process holds the file open, the replacement is retried with
+        /// increasing delays for up to a quarter of a second before the error is raised.
         /// </remarks>
         /// <param name="path">The path of the file to write.</param>
         /// <param name="contents">The bytes to write to the file.</param>

@@ -1,6 +1,8 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using OpenCV.Net;
 
 namespace Bonsai.Zarr
 {
@@ -133,58 +135,53 @@ namespace Bonsai.Zarr
         }
 
         /// <summary>
-        /// Appends each column of a row-major matrix as a new row of the array.
+        /// Appends each column of a single-channel matrix as a new row of the array.
         /// </summary>
-        /// <param name="data">The address of the first element of the matrix.</param>
-        /// <param name="step">The distance between the start of consecutive matrix rows, in bytes.</param>
-        /// <param name="rows">The number of rows in the matrix, which must equal the row length.</param>
-        /// <param name="columns">The number of columns in the matrix.</param>
+        /// <param name="matrix">
+        /// The matrix to write, whose number of rows must equal the row length and whose elements
+        /// must have the data type of the array.
+        /// </param>
         /// <exception cref="ArgumentException">
         /// The number of matrix rows differs from the number of elements in each array row.
         /// </exception>
-        public unsafe void WriteColumns(IntPtr data, int step, int rows, int columns)
+        public void WriteColumns(Mat matrix)
         {
-            if (rows != RowLength)
+            if (matrix.Rows != RowLength)
             {
                 throw new ArgumentException(
-                    $"The matrix has {rows} rows but the array expects {RowLength} elements per row.",
-                    nameof(rows));
+                    $"The matrix has {matrix.Rows} rows but the array expects {RowLength} elements per row.",
+                    nameof(matrix));
             }
 
             EnsureNotDisposed();
-            var length = checked(columns * rowSize);
+            var length = checked(matrix.Cols * rowSize);
             if (transposeBuffer.Length < length)
             {
                 transposeBuffer = new byte[length];
             }
 
-            var elementSize = dataType.ElementSize;
-            var source = (byte*)data;
-            fixed (byte* destination = transposeBuffer)
+            var handle = GCHandle.Alloc(transposeBuffer, GCHandleType.Pinned);
+            try
             {
-                var output = destination;
-                for (int column = 0; column < columns; column++)
-                {
-                    var input = source + column * elementSize;
-                    for (int row = 0; row < rows; row++)
-                    {
-                        switch (elementSize)
-                        {
-                            case 1: *output = *input; break;
-                            case 2: *(ushort*)output = *(ushort*)input; break;
-                            case 4: *(uint*)output = *(uint*)input; break;
-                            case 8: *(ulong*)output = *(ulong*)input; break;
-                            default: Buffer.MemoryCopy(input, output, elementSize, elementSize); break;
-                        }
-
-                        output += elementSize;
-                        input += step;
-                    }
-                }
+                using var transposed = new Mat(matrix.Cols, matrix.Rows, matrix.Depth, 1, handle.AddrOfPinnedObject(), rowSize);
+                CV.Transpose(matrix, transposed);
+            }
+            finally
+            {
+                handle.Free();
             }
 
             storage.Write(transposeBuffer.AsSpan(0, length));
-            RowCount += columns;
+            RowCount += matrix.Cols;
+        }
+
+        /// <summary>
+        /// Writes any buffered rows to the current chunk file.
+        /// </summary>
+        public void Flush()
+        {
+            EnsureNotDisposed();
+            storage.Flush();
         }
 
         void WriteMetadata(long rowCount)

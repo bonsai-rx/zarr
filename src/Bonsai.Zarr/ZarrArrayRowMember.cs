@@ -41,13 +41,13 @@ namespace Bonsai.Zarr
         public override int GetRowCount(TSource value) => 1;
 
         /// <inheritdoc/>
-        public override void Validate(ZarrArrayWriter array, TSource value)
+        public override void Validate(ZarrDataType dataType, int rowLength, TSource value)
         {
             var length = GetArray(value).Length;
-            if (length != array.RowLength)
+            if (length != rowLength)
             {
                 throw new InvalidOperationException(
-                    $"{GetDisplayName()} has {length} values but the array expects {array.RowLength} values per row.");
+                    $"{GetDisplayName()} has {length} values but the array expects {rowLength} values per row.");
             }
         }
 

@@ -4,9 +4,11 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Xml.Serialization;
 using Bonsai.Expressions;
 using OpenCV.Net;
@@ -22,7 +24,7 @@ namespace Bonsai.Zarr
     /// If the element is a single value or an array of values, it is written to a single Zarr array
     /// with the specified name. Otherwise, each public field and property of the element is written
     /// to its own Zarr array, in a group with the specified name, with nested types flattened into
-    /// dotted member names. The Zarr arrays in a group share their first dimension, so every member
+    /// dotted member names. The Zarr arrays in a group share their first dimension, and every member
     /// of an element must add the same number of rows.
     /// </para>
     /// <para>
@@ -33,10 +35,10 @@ namespace Bonsai.Zarr
     /// channel is written with one row per sample.
     /// </para>
     /// <para>
-    /// Rows are appended directly to chunk files that hold the same bytes as a raw binary file of
-    /// the same rows. The arrays are created with no rows when the first element arrives, and the
-    /// number of rows in each array is written when the sequence terminates or the subscription
-    /// is disposed.
+    /// Elements are written on a background thread to chunk files that hold the same bytes as a raw
+    /// binary file of the same rows. The arrays are created with no rows when the first element is
+    /// written, and the number of rows in each array is written once every element is written,
+    /// after the sequence terminates or the subscription is disposed.
     /// </para>
     /// </remarks>
     [DefaultProperty(nameof(Path))]
@@ -109,6 +111,12 @@ namespace Bonsai.Zarr
         /// </remarks>
         [Description("True to replace an existing array or group with the same name; otherwise, an error is raised if it already exists.")]
         public bool Overwrite { get; set; }
+
+        /// <summary>
+        /// Gets or sets an action called at each subscription with a task that completes once the
+        /// writer thread of that subscription closes every array.
+        /// </summary>
+        internal Action<Task>? WriterStarted { get; set; }
 
         /// <inheritdoc/>
         protected override Expression BuildCombinator(IEnumerable<Expression> arguments)
@@ -282,36 +290,67 @@ namespace Bonsai.Zarr
                 }
 
                 var path = string.Join("/", ZarrStore.GetNodeNames(Name));
-                var writer = new ZarrFrameWriter<TSource>(storePath!, path, members, getBufferLength, ChunkLength, Overwrite);
                 var gate = new object();
-                var disposed = false;
-                var subscription = source.Do(
+                var terminated = false;
+
+                bool Terminate()
+                {
+                    lock (gate)
+                    {
+                        if (terminated) return false;
+                        terminated = true;
+                        return true;
+                    }
+                }
+
+                void OnError(Exception error)
+                {
+                    if (Terminate()) observer.OnError(error);
+                }
+
+                void OnCompleted()
+                {
+                    if (Terminate()) observer.OnCompleted();
+                }
+
+                var writerStarted = WriterStarted;
+                var closed = writerStarted != null ? new TaskCompletionSource<bool>() : null;
+                var writer = new ZarrFrameWriter<TSource>(storePath!, path, members, getBufferLength, ChunkLength, Overwrite, OnError, () => closed?.SetResult(true));
+                if (closed != null) writerStarted!(closed.Task);
+                var subscription = source.SubscribeSafe(Observer.Create<TSource>(
                     value =>
                     {
-                        lock (gate)
+                        try
                         {
-                            if (disposed) return;
                             writer.Write(value);
                         }
+                        catch (Exception ex)
+                        {
+                            writer.Complete();
+                            OnError(ex);
+                            return;
+                        }
+
+                        lock (gate)
+                        {
+                            if (!terminated) observer.OnNext(value);
+                        }
+                    },
+                    error =>
+                    {
+                        writer.Complete();
+                        OnError(error);
                     },
                     () =>
                     {
-                        lock (gate)
-                        {
-                            disposed = true;
-                            writer.Dispose();
-                        }
-                    })
-                    .SubscribeSafe(observer);
+                        writer.Complete();
+                        OnCompleted();
+                    }));
 
                 return Disposable.Create(() =>
                 {
                     subscription.Dispose();
-                    lock (gate)
-                    {
-                        disposed = true;
-                        writer.Dispose();
-                    }
+                    writer.Complete();
                 });
             });
         }
