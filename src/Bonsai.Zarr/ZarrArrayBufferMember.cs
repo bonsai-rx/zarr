@@ -41,7 +41,7 @@ namespace Bonsai.Zarr
         public override int GetRowCount(TSource value) => GetArray(value).Length;
 
         /// <inheritdoc/>
-        public override void Validate(ZarrArrayWriter array, TSource value)
+        public override void Validate(ZarrDataType dataType, int rowLength, TSource value)
         {
         }
 

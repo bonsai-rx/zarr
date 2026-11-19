@@ -8,10 +8,15 @@ namespace Bonsai.Zarr
 {
     /// <summary>
     /// Represents a writer that appends the members of each element in a sequence to a single
-    /// Zarr array, or to a group with one array per member, so every array has the same length.
+    /// Zarr array, or to a group with one array per member.
     /// </summary>
+    /// <remarks>
+    /// Each element is checked when it is written and then queued by reference. The arrays are
+    /// created, written and closed on a dedicated thread. Elements must be written from one thread
+    /// at a time.
+    /// </remarks>
     /// <typeparam name="TSource">The type of the elements in the sequence.</typeparam>
-    internal sealed class ZarrFrameWriter<TSource> : IDisposable
+    internal sealed class ZarrFrameWriter<TSource>
     {
         readonly string storePath;
         readonly string path;
@@ -19,11 +24,15 @@ namespace Bonsai.Zarr
         readonly Func<TSource, int>? getBufferLength;
         readonly int? chunkLength;
         readonly bool overwrite;
+        readonly ZarrBackgroundWriter<TSource> writer;
+        ZarrDataType[]? dataTypes;
+        int[][]? rowShapes;
+        int[]? rowLengths;
         ZarrArrayWriter[]? arrays;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="ZarrFrameWriter{TSource}"/> class. No
-        /// node is created until the first element is written.
+        /// Initializes a new instance of the <see cref="ZarrFrameWriter{TSource}"/> class and
+        /// starts its writer thread. No node is created until the first element is written.
         /// </summary>
         /// <param name="storePath">The directory of the store.</param>
         /// <param name="path">
@@ -35,7 +44,7 @@ namespace Bonsai.Zarr
         /// <paramref name="path"/>; otherwise, each member is written to an array in a group.
         /// </param>
         /// <param name="getBufferLength">
-        /// A function that returns the number of rows each element adds to every array, or
+        /// A function that returns the number of rows added to every array by each element, or
         /// <see langword="null"/> if each element adds a single row.
         /// </param>
         /// <param name="chunkLength">
@@ -46,13 +55,20 @@ namespace Bonsai.Zarr
         /// <see langword="true"/> to replace an existing node at the same path; otherwise,
         /// <see langword="false"/>.
         /// </param>
+        /// <param name="onError">
+        /// The action called on the writer thread with the first error raised while creating,
+        /// writing or closing the arrays.
+        /// </param>
+        /// <param name="onClosed">The action called last on the writer thread.</param>
         public ZarrFrameWriter(
             string storePath,
             string path,
             ZarrMember<TSource>[] members,
             Func<TSource, int>? getBufferLength,
             int? chunkLength,
-            bool overwrite)
+            bool overwrite,
+            Action<Exception> onError,
+            Action onClosed)
         {
             this.storePath = storePath;
             this.path = path;
@@ -60,13 +76,14 @@ namespace Bonsai.Zarr
             this.getBufferLength = getBufferLength;
             this.chunkLength = chunkLength;
             this.overwrite = overwrite;
+            writer = new ZarrBackgroundWriter<TSource>(WriteMembers, Flush, Close, onError, onClosed);
         }
 
         bool IsSingleArray => members.Length == 1 && members[0].Name.Length == 0;
 
         /// <summary>
-        /// Appends the members of an element to their arrays. The first element determines the
-        /// data type and row length of each array.
+        /// Checks the members of an element and queues it to be appended to the arrays. The first
+        /// element determines the data type and row shape of each array.
         /// </summary>
         /// <param name="value">The element to write.</param>
         /// <exception cref="InvalidOperationException">
@@ -91,66 +108,48 @@ namespace Bonsai.Zarr
                 }
             }
 
-            arrays ??= CreateArrays(value);
-            for (int i = 0; i < members.Length; i++)
+            if (dataTypes == null)
             {
-                members[i].Validate(arrays[i], value);
+                dataTypes = members.Select(member => member.GetDataType(value)).ToArray();
+                rowShapes = members.Select(member => member.GetRowShape(value)).ToArray();
+                rowLengths = rowShapes.Select(shape => shape.Aggregate(1, (product, length) => product * length)).ToArray();
             }
 
+            for (int i = 0; i < members.Length; i++)
+            {
+                members[i].Validate(dataTypes[i], rowLengths![i], value);
+            }
+
+            writer.Write(value);
+        }
+
+        /// <summary>
+        /// Stops accepting elements, then closes the arrays once every queued element is written.
+        /// </summary>
+        public void Complete()
+        {
+            writer.Complete();
+        }
+
+        void WriteMembers(TSource value)
+        {
+            arrays ??= CreateArrays();
             for (int i = 0; i < members.Length; i++)
             {
                 members[i].Write(arrays[i], value);
             }
         }
 
-        ZarrArrayWriter[] CreateArrays(TSource value)
+        void Flush()
         {
-            if (IsSingleArray)
+            if (arrays == null) return;
+            foreach (var array in arrays)
             {
-                var member = members[0];
-                var settings = new ZarrArraySettings { ChunkLength = chunkLength, Overwrite = overwrite };
-                return new[] { new ZarrArrayWriter(storePath, path, member.GetDataType(value), member.GetRowShape(value), settings) };
+                array.Flush();
             }
-
-            var nodeNames = ZarrStore.GetNodeNames(path);
-            var groupName = nodeNames[nodeNames.Length - 1];
-            var groupDirectory = Path.Combine(new[] { storePath }.Concat(nodeNames).ToArray());
-            ZarrStore.PrepareNode(groupDirectory, overwrite);
-
-            var result = new List<ZarrArrayWriter>(members.Length);
-            try
-            {
-                foreach (var member in members)
-                {
-                    var rowShape = member.GetRowShape(value);
-                    var settings = new ZarrArraySettings
-                    {
-                        ChunkLength = chunkLength,
-                        DimensionNames = new[] { $"{groupName}_dim_0" }
-                            .Concat(rowShape.Select((_, i) => $"{member.Name}_dim_{i + 1}"))
-                            .ToArray()
-                    };
-                    result.Add(new ZarrArrayWriter(storePath, $"{path}/{member.Name}", member.GetDataType(value), rowShape, settings));
-                }
-            }
-            catch
-            {
-                foreach (var array in result)
-                {
-                    array.Dispose();
-                }
-
-                throw;
-            }
-
-            return result.ToArray();
         }
 
-        /// <summary>
-        /// Pads the last chunk of every array, writes the final shape of each array, and releases
-        /// the resources used by the writer.
-        /// </summary>
-        public void Dispose()
+        void Close()
         {
             if (arrays == null) return;
             Exception? error = null;
@@ -170,6 +169,49 @@ namespace Bonsai.Zarr
             {
                 ExceptionDispatchInfo.Capture(error).Throw();
             }
+        }
+
+        ZarrArrayWriter[] CreateArrays()
+        {
+            if (IsSingleArray)
+            {
+                var settings = new ZarrArraySettings { ChunkLength = chunkLength, Overwrite = overwrite };
+                return new[] { new ZarrArrayWriter(storePath, path, dataTypes![0], rowShapes![0], settings) };
+            }
+
+            var nodeNames = ZarrStore.GetNodeNames(path);
+            var groupName = nodeNames[nodeNames.Length - 1];
+            var groupDirectory = Path.Combine(new[] { storePath }.Concat(nodeNames).ToArray());
+            ZarrStore.PrepareNode(groupDirectory, overwrite);
+
+            var result = new List<ZarrArrayWriter>(members.Length);
+            try
+            {
+                for (int i = 0; i < members.Length; i++)
+                {
+                    var member = members[i];
+                    var rowShape = rowShapes![i];
+                    var settings = new ZarrArraySettings
+                    {
+                        ChunkLength = chunkLength,
+                        DimensionNames = new[] { $"{groupName}_dim_0" }
+                            .Concat(rowShape.Select((_, dimension) => $"{member.Name}_dim_{dimension + 1}"))
+                            .ToArray()
+                    };
+                    result.Add(new ZarrArrayWriter(storePath, $"{path}/{member.Name}", dataTypes![i], rowShape, settings));
+                }
+            }
+            catch
+            {
+                foreach (var array in result)
+                {
+                    array.Dispose();
+                }
+
+                throw;
+            }
+
+            return result.ToArray();
         }
     }
 }

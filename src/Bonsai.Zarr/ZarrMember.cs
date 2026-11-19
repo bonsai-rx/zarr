@@ -40,7 +40,7 @@
         public abstract int[] GetRowShape(TSource value);
 
         /// <summary>
-        /// Returns the number of rows the member of the specified element adds to the array.
+        /// Returns the number of rows added to the array by the member of the specified element.
         /// </summary>
         /// <param name="value">An element of the sequence.</param>
         /// <returns>The number of rows to append.</returns>
@@ -49,12 +49,13 @@
         /// <summary>
         /// Checks that the member of the specified element can be appended to the array.
         /// </summary>
-        /// <param name="array">The writer of the array that holds the member values.</param>
+        /// <param name="dataType">The data type of the array elements.</param>
+        /// <param name="rowLength">The number of elements in each row of the array.</param>
         /// <param name="value">An element of the sequence.</param>
         /// <exception cref="System.InvalidOperationException">
         /// The member is missing or its shape or type differs from the array.
         /// </exception>
-        public abstract void Validate(ZarrArrayWriter array, TSource value);
+        public abstract void Validate(ZarrDataType dataType, int rowLength, TSource value);
 
         /// <summary>
         /// Appends the member of the specified element to the array.

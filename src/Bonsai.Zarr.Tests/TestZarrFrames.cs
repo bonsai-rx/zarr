@@ -175,8 +175,7 @@ namespace Bonsai.Zarr.Tests
         [TestMethod]
         public async Task BufferLengthMismatch_RaisesWithoutWritingElement()
         {
-            // The member lengths of an element are checked before any member is written, so the
-            // arrays keep the same length when an element is rejected.
+            // The arrays always keep the same length when an element is rejected.
             var mismatched = CreateBuffer(1);
             mismatched.Data = new[] { 1.0, 2.0 };
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await ZarrTestHelper.Write(
@@ -239,17 +238,18 @@ namespace Bonsai.Zarr.Tests
         [TestMethod]
         public async Task ExistingGroup_RaisesIOException()
         {
+            // The error from an existing group is raised while the sequence has not terminated.
             await ZarrTestHelper.Write(CreateWriter(chunkLength: 2), Observable.Return(CreateSample(0)));
             await Assert.ThrowsExactlyAsync<IOException>(
-                async () => await ZarrTestHelper.Write(CreateWriter(chunkLength: 2), Observable.Return(CreateSample(1))));
+                async () => await ZarrTestHelper.Write(CreateWriter(chunkLength: 2), Observable.Return(CreateSample(1)).Concat(Observable.Never<Sample>())));
             CollectionAssert.AreEqual(new[] { 0.0, 0.0 }, ZarrTestHelper.ReadElements<double>(Path.Combine(GetArrayPath("Time"), "c", "0")));
         }
 
         [TestMethod]
         public async Task ExistingGroup_WithChangedMembers_IsReplaced()
         {
-            // Overwriting replaces the whole group, so arrays from members that are no longer
-            // written do not remain beside the new ones.
+            // Overwriting replaces the whole group, including arrays from members that are no longer
+            // written.
             await ZarrTestHelper.Write(CreateWriter(chunkLength: 2), Observable.Return(CreateSample(0)));
             var writer = CreateWriter(chunkLength: 2);
             writer.Overwrite = true;

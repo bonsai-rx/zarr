@@ -67,6 +67,14 @@ namespace Bonsai.Zarr
             }
         }
 
+        /// <summary>
+        /// Writes any buffered rows to the current chunk file.
+        /// </summary>
+        public void Flush()
+        {
+            chunk?.Flush();
+        }
+
         void CompleteChunk(bool flushToDisk)
         {
             var completed = chunk!;

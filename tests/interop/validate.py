@@ -40,21 +40,15 @@ CHANNEL_COUNT = 4
 INTERRUPTED_COUNT = 10
 INTERRUPTED_CONTIGUOUS_COUNT = 10000
 INTERRUPTED_CONTIGUOUS_FRAME_COUNT = 30000
-WRITER_BUFFER_SIZE = 65536
+INTERRUPTED_MISSING_SIGNAL_COUNT = 1000
 
-
-def flushed_rows(count, row_size):
-    """Returns the rows of an open array that reached its file, in whole writer buffers."""
-    buffer_size = max(row_size, WRITER_BUFFER_SIZE - WRITER_BUFFER_SIZE % row_size)
-    return count * row_size // buffer_size * buffer_size // row_size
-
-
-# Rows still in the writer buffer when the copy was taken are lost. Only complete chunks remain
-# of a chunked array, and only the flushed part of the buffer of a single-file array.
-RECOVERED_COUNT = INTERRUPTED_COUNT // CHUNK_LENGTH * CHUNK_LENGTH
-RECOVERED_CONTIGUOUS_COUNT = flushed_rows(INTERRUPTED_CONTIGUOUS_COUNT, 8)
-RECOVERED_TIME_COUNT = flushed_rows(INTERRUPTED_CONTIGUOUS_FRAME_COUNT, 8)
-RECOVERED_SIGNAL_COUNT = flushed_rows(INTERRUPTED_CONTIGUOUS_FRAME_COUNT, 4)
+# The copy is taken once every queued row is written, so repair recovers every row, except the
+# rows removed from the end of one array of a group to simulate a crash while the writer was
+# behind.
+RECOVERED_COUNT = INTERRUPTED_COUNT
+RECOVERED_CONTIGUOUS_COUNT = INTERRUPTED_CONTIGUOUS_COUNT
+RECOVERED_TIME_COUNT = INTERRUPTED_CONTIGUOUS_FRAME_COUNT
+RECOVERED_SIGNAL_COUNT = INTERRUPTED_CONTIGUOUS_FRAME_COUNT - INTERRUPTED_MISSING_SIGNAL_COUNT
 
 VALUES = {
     "bool": lambda i: i % 3 == 0,
