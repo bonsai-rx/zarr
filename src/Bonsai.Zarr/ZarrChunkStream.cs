@@ -90,6 +90,7 @@ namespace Bonsai.Zarr
                 if (!TryWriteFile(buffer.AsSpan(0, bufferLength)))
                 {
                     stream.Write(buffer, 0, bufferLength);
+                    stream.Flush();
                 }
 
                 bufferLength = 0;
