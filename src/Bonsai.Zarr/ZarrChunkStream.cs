@@ -16,7 +16,7 @@ namespace Bonsai.Zarr
 
         readonly FileStream stream;
 #if !NET
-        readonly SafeFileHandle handle;
+        readonly SafeFileHandle? handle;
 #endif
         readonly byte[] buffer;
         int bufferLength;
@@ -34,7 +34,10 @@ namespace Bonsai.Zarr
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, bufferSize: 1);
 #if !NET
-            handle = stream.SafeFileHandle;
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                handle = stream.SafeFileHandle;
+            }
 #endif
             buffer = new byte[Math.Max(rowSize, TargetBufferSize - TargetBufferSize % rowSize)];
         }
@@ -48,9 +51,8 @@ namespace Bonsai.Zarr
         {
             while (data.Length > 0)
             {
-                if (bufferLength == 0 && data.Length >= buffer.Length)
+                if (bufferLength == 0 && data.Length >= buffer.Length && TryWriteFile(data))
                 {
-                    WriteFile(data);
                     return;
                 }
 
@@ -85,17 +87,24 @@ namespace Bonsai.Zarr
         {
             if (bufferLength > 0)
             {
-                WriteFile(buffer.AsSpan(0, bufferLength));
+                if (!TryWriteFile(buffer.AsSpan(0, bufferLength)))
+                {
+                    stream.Write(buffer, 0, bufferLength);
+                }
+
                 bufferLength = 0;
             }
         }
 
-        void WriteFile(ReadOnlySpan<byte> data)
+        bool TryWriteFile(ReadOnlySpan<byte> data)
         {
 #if NET
             stream.Write(data);
+            return true;
 #else
+            if (handle == null) return false;
             NativeMethods.WriteFile(handle, data);
+            return true;
 #endif
         }
 
