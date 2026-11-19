@@ -75,7 +75,7 @@ jobs:
       # ----------------------------------------------------------------------- Configure build
       - name: Configure build
         id: configure-build
-        uses: bonsai-rx/configure-build@v2
+        uses: bonsai-rx/configure-build@v3
 
       # ----------------------------------------------------------------------- Build
       - name: Restore
@@ -94,9 +94,6 @@ jobs:
         run: dotnet test --no-restore --no-build --configuration ${{matrix.configuration}} --verbosity normal --framework net472
       - name: Test .NET 8
         run: dotnet test --no-restore --no-build --configuration ${{matrix.configuration}} --verbosity normal --framework net8.0
-      - name: Test .NET 8 Windows
-        if: matrix.platform.rid == 'win-x64'
-        run: dotnet test --no-restore --no-build --configuration ${{matrix.configuration}} --verbosity normal --framework net8.0-windows
 
       # ----------------------------------------------------------------------- Test interop
       - name: Set up uv
@@ -153,7 +150,7 @@ jobs:
       # ----------------------------------------------------------------------- Configure build
       - name: Configure build
         id: configure-build
-        uses: bonsai-rx/configure-build@v2
+        uses: bonsai-rx/configure-build@v3
 
       # ----------------------------------------------------------------------- Restore
       - name: Restore
@@ -247,8 +244,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     permissions:
-      # Needed to attach files to releases
-      contents: write
       # Needed to upload to GitHub Packages
       packages: write
     if: github.event_name == 'push' || github.event_name == 'release'
@@ -266,19 +261,9 @@ jobs:
           name: Packages
           path: artifacts/packages/
 
-      # ----------------------------------------------------------------------- Upload release assets
-      - name: Upload release assets
-        if: github.event_name == 'release'
-        run: gh release upload --repo ${{github.repository}} ${{github.event.release.tag_name}} artifacts/packages/* --clobber
-        env:
-          GH_TOKEN: ${{github.token}}
-
       # ----------------------------------------------------------------------- Push to GitHub Packages
       - name: Push to GitHub Packages
         run: dotnet nuget push "artifacts/packages/*.nupkg" --skip-duplicate --no-symbols --api-key ${{secrets.GITHUB_TOKEN}} --source https://nuget.pkg.github.com/${{github.repository_owner}}
-        env:
-          # This is a workaround for https://github.com/NuGet/Home/issues/9775
-          DOTNET_SYSTEM_NET_HTTP_USESOCKETSHTTPHANDLER: 0
 
   # =====================================================================================================================================================================
   # Publish packages to NuGet.org
@@ -294,6 +279,11 @@ jobs:
     environment: public-release
     needs: build
     if: github.event_name == 'release'
+    permissions:
+      # Needed to attach files to releases
+      contents: write
+      # Needed to request the OIDC token for NuGet.org trusted publishing
+      id-token: write
     steps:
       # ----------------------------------------------------------------------- Set up .NET
       - name: Setup .NET
@@ -308,12 +298,21 @@ jobs:
           name: Packages
           path: artifacts/packages/
 
-      # ----------------------------------------------------------------------- Push to NuGet.org
-      - name: Push to NuGet.org
-        run: dotnet nuget push "artifacts/packages/*.nupkg" --api-key ${{secrets.NUGET_API_KEY}} --source ${{vars.NUGET_API_URL}}
+      # ----------------------------------------------------------------------- Upload release assets
+      - name: Upload release assets
+        run: gh release upload --repo ${{github.repository}} ${{github.event.release.tag_name}} artifacts/packages/* --clobber
         env:
-          # This is a workaround for https://github.com/NuGet/Home/issues/9775
-          DOTNET_SYSTEM_NET_HTTP_USESOCKETSHTTPHANDLER: 0
+          GH_TOKEN: ${{github.token}}
+
+      # ----------------------------------------------------------------------- Push to NuGet.org
+      - name: Log in to NuGet.org with OIDC
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: ${{secrets.NUGET_USER}}
+
+      - name: Push to NuGet.org
+        run: dotnet nuget push "artifacts/packages/*.nupkg" --api-key ${{steps.nuget-login.outputs.NUGET_API_KEY}} --source ${{vars.NUGET_API_URL}}
 
 
   # =====================================================================================================================================================================
